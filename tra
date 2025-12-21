@@ -1,0 +1,2131 @@
+-- Universal Trade System V6.3.5 - Secret Card Upgrade
+
+-- ========================================== --
+-- Services & Dependencies
+-- ========================================== --
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CoreGui = game:GetService("CoreGui")
+local Debris = game:GetService("Debris")
+local UserInputService = game:GetService("UserInputService")
+
+local Knit = require(ReplicatedStorage.Packages.Knit)
+local TradeController = Knit.GetController("TradeController")
+local TradingService = Knit.GetService("TradingService")
+local ReplicaListener = Knit.GetController("ReplicaListener")
+local LocalPlayer = Players.LocalPlayer
+local InventoryManager = {} 
+
+if CoreGui:FindFirstChild("CleanTradeGUI") then
+    CoreGui.CleanTradeGUI:Destroy()
+end
+
+-- ========================================== --
+-- Configuration & Constants
+-- ========================================== --
+local CONFIG = {
+    VERSION = "6.5",
+    GUI_NAME = "CleanTradeGUI",
+    MAIN_WINDOW_SIZE = UDim2.new(0, 800, 0, 500),
+    SIDEBAR_WIDTH = 120,
+    MINI_ICON_SIZE = UDim2.new(0, 50, 0, 50),
+    STATUS_RESET_DELAY = 4,
+    BUTTON_CHECK_INTERVAL = 0.5,
+    TRADE_RESET_THRESHOLD = 3,
+    CORNER_RADIUS = 8,
+    SMALL_CORNER_RADIUS = 4,
+    LIST_PADDING = 3,
+    BUTTON_PADDING = 5,
+    TOGGLE_KEY = Enum.KeyCode.T,
+}
+
+local THEME = {
+    MainBg = Color3.fromRGB(20, 20, 25),
+    MainTransparency = 0.1,
+    PanelBg = Color3.fromRGB(10, 10, 15),
+    PanelTransparency = 0.5,
+    TextWhite = Color3.fromRGB(255, 255, 255),
+    TextGray = Color3.fromRGB(180, 180, 180),
+    BtnDefault = Color3.fromRGB(50, 50, 60),
+    BtnSelected = Color3.fromRGB(0, 140, 255),
+    BtnMainTab = Color3.fromRGB(40, 40, 50),
+    BtnMainTabSelected = Color3.fromRGB(255, 170, 0),
+    BtnDupe = Color3.fromRGB(170, 0, 255),
+    BtnDisabled = Color3.fromRGB(40, 40, 40),
+    TextDisabled = Color3.fromRGB(100, 100, 100),
+    ItemInv = Color3.fromRGB(100, 255, 140),
+    ItemWiki = Color3.fromRGB(180, 140, 255),
+    ItemEquip = Color3.fromRGB(255, 80, 80),
+    ItemInTrade = Color3.fromRGB(255, 200, 80),
+    PlayerBtn = Color3.fromRGB(255, 170, 0),
+    Success = Color3.fromRGB(85, 255, 127),
+    Fail = Color3.fromRGB(255, 85, 85),
+    DupeReady = Color3.fromRGB(0, 255, 200),
+    CardBg = Color3.fromRGB(35, 35, 40),
+    CardSelected = Color3.fromRGB(0, 255, 120),
+    TagAdmin = Color3.fromRGB(200, 50, 50),
+    TagSecret = Color3.fromRGB(255, 180, 0),
+}
+
+local DUPE_RECIPES = {
+    Scrolls = {
+        {
+            Name = "Dark Scroll", 
+            Tier = 5, 
+            RequiredTiers = {3, 4, 6}, 
+            Service = "Scrolls",
+            PreventIfOwned = true
+        }
+    },
+    Tickets = {
+        {Name = "Void Ticket", Tier = 3, RequiredTiers = {4, 5, 6}, Service = "Tickets"},
+        {Name = "Summer Ticket", Tier = 4, RequiredTiers = {3, 5, 6}, Service = "Tickets"},
+        {Name = "Eternal Ticket", Tier = 5, RequiredTiers = {3, 4, 6}, Service = "Tickets"},
+        {Name = "Arcade Ticket", Tier = 6, RequiredTiers = {3, 4, 5}, Service = "Tickets"},
+    },
+    Potions = {
+        {Name = "White Strawberry", Tier = 1, RequiredTiers = {2}, Service = "Strawberry"},
+        {Name = "Mega Luck Potion", Tier = 3, RequiredTiers = {1, 2}, Service = "Luck Potion"},
+        {Name = "Mega Wins Potion", Tier = 3, RequiredTiers = {1, 2}, Service = "Wins Potion"},
+        {Name = "Mega Exp Potion", Tier = 3, RequiredTiers = {1, 2}, Service = "Exp Potion"},
+    }
+}
+
+local HIDDEN_ITEMS = {
+    Accessories = {
+        "Ghost", "Pumpkin Head", "Tri Tooth", "Tri Foot", "Tri Eyes", "Tri Ton"
+    },
+    Pets = {
+        "I.N.D.E.X", "Spooksy", "Spooplet", "Lordfang", "Batkin", 
+        "Flame", "Mega Flame", "Turbo Flame", "Ultra Flame", "I2Pet", "Present"
+    },
+    Secrets = {
+        "Banananananananito Bandito", "Tung Tung Tung Tung Tung Tung Tung..", 
+        "Los Tralaleritos", "Los Karkerkirkursitos", "OMEGA Sahur", "Anpali Babel", 
+        "Skull Skull Skull Sahur", "Prestige Skull Skull Skull Sahur", 
+        "Shimpanzini Bananini Priestini", "Frappochino Assassino", 
+        "Prestige Frappochino Assassino", "I2PERFECTINI FOXININI", "67", 
+        "Ban Ban Ban Sahur", "Prestige Ban Ban Sahur", "Santanzelli Trulala"
+    },
+    Crates = {"Spooky Crate", "i2Perfect Crate"},
+}
+
+local ITEM_PREFIXES = {
+    Inventory = "📦 ",
+    Equipped = "🔒 ",
+    InTrade = "🔄 ",
+    Wikipedia = "📖 ",
+    Dupe = "✨ ",
+}
+
+-- ========================================== --
+-- Utility Functions
+-- ========================================== --
+local Utils = {}
+
+function Utils.IsTradeActive()
+    local Windows = LocalPlayer.PlayerGui:FindFirstChild("Windows")
+    if not Windows then return false end
+    
+    local activeWindows = {"TradingFrame", "AreYouSure", "AreYouSureSecret", "AmountSelector"}
+    for _, winName in ipairs(activeWindows) do
+        local frame = Windows:FindFirstChild(winName)
+        if frame and frame.Visible then 
+            return true 
+        end
+    end
+    return false
+end
+
+function Utils.IsHidden(name, category)
+    local list = HIDDEN_ITEMS[category]
+    if not list then return false end
+    
+    for _, hiddenName in pairs(list) do
+        if hiddenName == name then 
+            return true 
+        end
+    end
+    return false
+end
+
+function Utils.CheckIsEquipped(guid, name, category, allData)
+    if category == "Secrets" then
+        return (allData.MonsterService.EquippedMonster == name)
+    end
+    
+    if not guid then return false end
+    
+    if category == "Pets" then
+        for _, eqGuid in pairs(allData.PetsService.EquippedPets or {}) do
+            if eqGuid == guid then 
+                return true 
+            end
+        end
+    elseif category == "Accessories" then
+        for _, eqGuid in pairs(allData.AccessoryService.EquippedAccessories or {}) do
+            if eqGuid == guid then 
+                return true 
+            end
+        end
+    end
+    
+    return false
+end
+
+function Utils.GetItemDetails(info, category)
+    if type(info) ~= "table" then return "" end
+    local details = ""
+    
+    if category == "Pets" then
+        local evo = tonumber(info.Evolution)
+        if evo and evo > 0 then 
+            details = details .. " " .. string.rep("⭐", evo) 
+        end
+        if info.Level then 
+            details = details .. " Lv." .. info.Level 
+        end
+        
+    elseif category == "Accessories" then
+        if info.Scroll and info.Scroll.Name then
+            details = details .. " [" .. info.Scroll.Name .. "]"
+            
+            if info.Scroll.Upgrades then
+                local upgrades = info.Scroll.Upgrades
+                local dmg = upgrades.Damage and math.floor(upgrades.Damage * 100) or 0
+                local exp = upgrades.Exp and math.floor(upgrades.Exp * 100) or 0
+                local hp = upgrades.MaxHealth and math.floor(upgrades.MaxHealth * 100) or 0
+                if dmg > 0 or exp > 0 or hp > 0 then
+                    details = details .. " [" .. dmg .. "][" .. exp .. "][" .. hp .. "]"
+                end
+            end
+        end
+    end
+    
+    if info.Shiny or info.Golden then 
+        details = details .. " [✨]" 
+    end
+    
+    return details
+end
+
+function Utils.SanitizeNumberInput(textBox, maxValue, minValue)
+    local connection
+    connection = textBox:GetPropertyChangedSignal("Text"):Connect(function()
+        local txt = textBox.Text
+        if txt == "" then return end
+        
+        local numStr = txt:gsub("%D", "")
+        if numStr == "" then
+            textBox.Text = tostring(minValue or 1)
+            return
+        end
+        
+        if txt ~= numStr then
+            textBox.Text = numStr
+            return
+        end
+        
+        local n = tonumber(numStr)
+        if n then
+            if minValue and n < minValue then
+                textBox.Text = tostring(minValue)
+                return
+            end
+            if maxValue and n > maxValue then
+                textBox.Text = tostring(maxValue)
+                return
+            end
+        end
+    end)
+    return connection
+end
+
+-- ========================================== --
+-- UI Component Factory
+-- ========================================== --
+local UIFactory = {}
+
+function UIFactory.CreateButton(props)
+    local btn = Instance.new("TextButton")
+    btn.Size = props.Size or UDim2.new(0, 100, 0, 30)
+    btn.Position = props.Position or UDim2.new(0, 0, 0, 0)
+    btn.Text = props.Text or ""
+    btn.BackgroundColor3 = props.BgColor or THEME.BtnDefault
+    btn.BackgroundTransparency = props.BgTransparency or 0
+    btn.TextColor3 = props.TextColor or THEME.TextWhite
+    btn.Font = props.Font or Enum.Font.Gotham
+    btn.TextSize = props.TextSize or 12
+    btn.TextXAlignment = props.TextXAlign or Enum.TextXAlignment.Center
+    btn.Parent = props.Parent
+    
+    if props.Corner ~= false then
+        local corner = Instance.new("UICorner", btn)
+        corner.CornerRadius = UDim.new(0, props.CornerRadius or CONFIG.CORNER_RADIUS)
+    end
+    
+    if props.OnClick then
+        btn.MouseButton1Click:Connect(props.OnClick)
+    end
+    
+    return btn
+end
+
+function UIFactory.CreateLabel(props)
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = props.Size or UDim2.new(1, 0, 0, 30)
+    lbl.Position = props.Position or UDim2.new(0, 0, 0, 0)
+    lbl.Text = props.Text or ""
+    lbl.BackgroundTransparency = props.BgTransparency or 1
+    lbl.TextColor3 = props.TextColor or THEME.TextWhite
+    lbl.Font = props.Font or Enum.Font.Gotham
+    lbl.TextSize = props.TextSize or 12
+    lbl.TextXAlignment = props.TextXAlign or Enum.TextXAlignment.Center
+    lbl.Parent = props.Parent
+    return lbl
+end
+
+function UIFactory.CreateFrame(props)
+    local frame = Instance.new("Frame")
+    frame.Size = props.Size or UDim2.new(1, 0, 1, 0)
+    frame.Position = props.Position or UDim2.new(0, 0, 0, 0)
+    frame.BackgroundColor3 = props.BgColor or THEME.PanelBg
+    frame.BackgroundTransparency = props.BgTransparency or THEME.PanelTransparency
+    frame.Parent = props.Parent
+    
+    if props.Corner ~= false then
+        local corner = Instance.new("UICorner", frame)
+        corner.CornerRadius = UDim.new(0, props.CornerRadius or CONFIG.CORNER_RADIUS)
+    end
+    
+    if props.Stroke then
+        local stroke = Instance.new("UIStroke", frame)
+        stroke.Color = props.StrokeColor or Color3.fromRGB(60, 60, 70)
+        stroke.Thickness = props.StrokeThickness or 1.5
+        stroke.Transparency = props.StrokeTransparency or 0.4
+    end
+    
+    return frame
+end
+
+function UIFactory.CreateScrollingFrame(props)
+    local scroll = Instance.new("ScrollingFrame")
+    scroll.Size = props.Size or UDim2.new(1, -10, 1, -35)
+    scroll.Position = props.Position or UDim2.new(0, 5, 0, 30)
+    scroll.BackgroundTransparency = 1
+    scroll.ScrollBarThickness = props.ScrollBarThickness or 3
+    scroll.Parent = props.Parent
+    return scroll
+end
+
+function UIFactory.AddCorner(instance, radius)
+    local corner = Instance.new("UICorner", instance)
+    corner.CornerRadius = UDim.new(0, radius or CONFIG.CORNER_RADIUS)
+    return corner
+end
+
+function UIFactory.AddStroke(instance, color, thickness, transparency)
+    local stroke = Instance.new("UIStroke", instance)
+    stroke.Color = color or Color3.fromRGB(60, 60, 70)
+    stroke.Thickness = thickness or 1.5
+    stroke.Transparency = transparency or 0.4
+    return stroke
+end
+
+function UIFactory.MakeDraggable(topBar, object)
+    local dragging, dragInput, dragStart, startPosition
+    
+    local function update(input)
+        local delta = input.Position - dragStart
+        object.Position = UDim2.new(
+            startPosition.X.Scale, 
+            startPosition.X.Offset + delta.X, 
+            startPosition.Y.Scale, 
+            startPosition.Y.Offset + delta.Y
+        )
+    end
+    
+    topBar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or 
+           input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPosition = object.Position
+            
+            input.Changed:Connect(function() 
+                if input.UserInputState == Enum.UserInputState.End then 
+                    dragging = false 
+                end 
+            end)
+        end
+    end)
+    
+    topBar.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or 
+           input.UserInputType == Enum.UserInputType.Touch then 
+            dragInput = input 
+        end
+    end)
+    
+    UserInputService.InputChanged:Connect(function(input) 
+        if input == dragInput and dragging then 
+            update(input) 
+        end 
+    end)
+end
+
+-- ========================================== --
+-- State Manager
+-- ========================================== --
+local StateManager = {
+    currentMainTab = "Players",
+    currentSubTab = "Pets",
+    currentDupeTab = "Scrolls",
+    itemsInTrade = {},
+    playerButtons = {},
+    selectedSecrets = {},
+    statusResetTask = nil,
+    inputConnection = nil,
+}
+
+function StateManager:SetStatus(text, color, statusLabel)
+    if self.statusResetTask then 
+        task.cancel(self.statusResetTask) 
+    end
+    
+    statusLabel.Text = text
+    statusLabel.TextColor3 = color or THEME.TextGray
+    
+    self.statusResetTask = task.delay(CONFIG.STATUS_RESET_DELAY, function()
+        statusLabel.Text = "Ready."
+        statusLabel.TextColor3 = THEME.TextGray
+    end)
+end
+
+function StateManager:ResetTrade() 
+    self.itemsInTrade = {} 
+end
+
+function StateManager:AddToTrade(key, itemData)
+    if not self.itemsInTrade[key] then
+        self.itemsInTrade[key] = {
+            Name = itemData.Name, 
+            Amount = 0, 
+            Guid = itemData.Guid, 
+            Service = itemData.Service, 
+            Category = itemData.Category, 
+            Type = itemData.Type, 
+            RawInfo = itemData.RawInfo
+        }
+    end
+    self.itemsInTrade[key].Amount = self.itemsInTrade[key].Amount + (itemData.Amount or 1)
+end
+
+function StateManager:RemoveFromTrade(key) 
+    self.itemsInTrade[key] = nil 
+end
+
+function StateManager:IsInTrade(key) 
+    return self.itemsInTrade[key] ~= nil 
+end
+
+function StateManager:ToggleSecretSelection(secretData, statusLabel)
+    if secretData.IsOwned then
+        if statusLabel then
+            self:SetStatus(
+                "❌ Cannot select: " .. secretData.Name .. " is already owned!", 
+                Color3.fromRGB(255, 85, 85), 
+                statusLabel
+            )
+        end
+        return
+    end
+    
+    local myMonsterLimit = InventoryManager.GetMonsterCount()
+    
+    if myMonsterLimit == 0 then
+        if statusLabel then
+            self:SetStatus(
+                "❌ You need at least 1 monster to swap!", 
+                Color3.fromRGB(255, 85, 85), 
+                statusLabel
+            )
+        end
+        return
+    end
+
+    local currentSelectedTotal = 0
+    for _, info in pairs(self.selectedSecrets) do
+        currentSelectedTotal = currentSelectedTotal + info.Count
+    end
+    
+    if currentSelectedTotal >= myMonsterLimit then
+        if statusLabel then
+            self:SetStatus(
+                string.format("⚠️ Limit! Selected: %d / Have: %d (All will be swapped!)", 
+                currentSelectedTotal, 
+                myMonsterLimit
+            ), 
+            Color3.fromRGB(255, 200, 0), 
+            statusLabel)
+        end
+        return
+    end
+
+    local name = secretData.Name
+    if self.selectedSecrets[name] then
+        self.selectedSecrets[name].Count = self.selectedSecrets[name].Count + 1
+    else
+        self.selectedSecrets[name] = {
+            Count = 1,
+            Data = secretData
+        }
+    end
+end
+
+function StateManager:DecreaseSecretSelection(secretData)
+    local name = secretData.Name
+    if self.selectedSecrets[name] then
+        if self.selectedSecrets[name].Count > 1 then
+            self.selectedSecrets[name].Count = self.selectedSecrets[name].Count - 1
+        else
+            self.selectedSecrets[name] = nil
+        end
+    end
+end
+
+function StateManager:ClearSecretSelection()
+    self.selectedSecrets = {}
+end
+
+-- ========================================== --
+-- Trade Manager
+-- ========================================== --
+local TradeManager = {}
+TradeManager.IsProcessing = false 
+
+function TradeManager.ForceTradeWith(targetPlayer, statusLabel)
+    if not targetPlayer or TradeManager.IsProcessing or Utils.IsTradeActive() then 
+        return 
+    end
+    
+    TradeManager.IsProcessing = true 
+    StateManager:SetStatus("🚀 Requesting trade...", THEME.PlayerBtn, statusLabel)
+    
+    TradingService:InitializeNewTrade(targetPlayer.UserId):andThen(function(result)
+        TradeManager.IsProcessing = false 
+        
+        if result then
+            pcall(function() 
+                TradeController:OnTradeRequestAccepted(targetPlayer.UserId) 
+            end)
+            
+            if debug and debug.setupvalue then
+                pcall(function() 
+                    debug.setupvalue(TradeController.AddToTradeData, 4, LocalPlayer.UserId) 
+                end)
+            end
+            
+            StateManager:SetStatus("✅ Request sent!", THEME.Success, statusLabel)
+        else
+            StateManager:SetStatus("❌ Failed (Cooldown/Busy).", THEME.ItemEquip, statusLabel)
+        end
+    end)
+end
+
+function TradeManager.SendTradeSignal(action, itemData, amount, statusLabel, callbacks)
+    if not Utils.IsTradeActive() then
+        StateManager:SetStatus("⚠️ Trade Menu NOT open!", THEME.ItemEquip, statusLabel)
+        return
+    end
+    
+    local success, fakeBtn = pcall(function()
+        local btn = Instance.new("ImageButton")
+        btn.Name = "FakeTradeItem_" .. itemData.Name .. "_" .. tick()
+        btn.Visible = false
+        btn.Size = UDim2.new(0, 100, 0, 100)
+        btn.BackgroundTransparency = 1
+        btn:SetAttribute("Service", itemData.Service)
+        btn:SetAttribute("Index", itemData.Name)
+        btn:SetAttribute("Quantity", amount)
+        btn:SetAttribute("IsEquipped", false)
+        
+        if itemData.Guid then 
+            btn:SetAttribute("Guid", tostring(itemData.Guid)) 
+        end
+        
+        if itemData.RawInfo then
+            if itemData.RawInfo.Evolution then 
+                btn:SetAttribute("Evolution", itemData.RawInfo.Evolution) 
+            end
+            if itemData.RawInfo.Shiny then 
+                btn:SetAttribute("Shiny", true) 
+            end
+            if itemData.RawInfo.Golden then 
+                btn:SetAttribute("Golden", true) 
+            end
+        end
+        
+        game:GetService("CollectionService"):AddTag(btn, "Tradeable")
+        btn.Parent = LocalPlayer:WaitForChild("PlayerGui")
+        return btn
+    end)
+    
+    if success and fakeBtn then
+        pcall(function()
+            local key = itemData.Guid or itemData.Name
+            
+            if action == "Add" then
+                TradeController:AddToTradeData(fakeBtn, amount)
+                StateManager:AddToTrade(key, itemData)
+                StateManager:SetStatus("✅ Added: " .. itemData.Name, THEME.ItemInv, statusLabel)
+            elseif action == "Remove" then
+                TradeController:RemoveFromTradeData(fakeBtn, amount)
+                StateManager:RemoveFromTrade(key)
+                StateManager:SetStatus("🗑️ Removed: " .. itemData.Name, THEME.ItemEquip, statusLabel)
+            end
+        end)
+        
+        task.delay(0.5, function() 
+            if fakeBtn then 
+                fakeBtn:Destroy() 
+            end 
+        end)
+    end
+    
+    if callbacks then
+        if callbacks.UpdateTradeViewer then 
+            callbacks.UpdateTradeViewer() 
+        end
+        if callbacks.RefreshInventory then 
+            callbacks.RefreshInventory() 
+        end
+    end
+end
+
+function TradeManager.GetGameTradeId()
+    local success, tradeId = pcall(function()
+        local Knit = require(game:GetService("ReplicatedStorage").Packages.Knit)
+        local TradeController = Knit.GetController("TradeController")
+        
+        if debug and debug.getupvalues then
+            local upvalues = debug.getupvalues(TradeController.AddToTradeData)
+            for i, v in pairs(upvalues) do
+                if type(v) == "number" and v > 1000 then 
+                    return v 
+                end
+            end
+        end
+    end)
+    
+    return success and tradeId or nil
+end
+
+function TradeManager.ExecuteMagicDupe(recipe, statusLabel, amount) 
+    if TradeManager.IsProcessing or not Utils.IsTradeActive() then 
+        if not Utils.IsTradeActive() then 
+            StateManager:SetStatus("⚠️ Open Trade Menu first!", THEME.Fail, statusLabel) 
+        end
+        return 
+    end
+
+    local replica = ReplicaListener:GetReplica()
+    local playerData = replica and replica.Data
+    
+    if not playerData or not playerData.ItemsService then 
+        StateManager:SetStatus("❌ Data Error!", THEME.Fail, statusLabel) 
+        return 
+    end
+
+    local targetTier = tonumber(recipe.Tier)
+    local serviceName = recipe.Service
+    local itemsInv = playerData.ItemsService.Inventory
+    local serviceData = itemsInv and itemsInv[serviceName]
+
+    if serviceData then
+        local ownedAmt = serviceData[tostring(targetTier)] or serviceData[targetTier] or 0
+        if ownedAmt > 0 then 
+            StateManager:SetStatus("❌ Owned: You already have this!", THEME.Fail, statusLabel) 
+            return 
+        end
+    end
+
+    local realTradeId = TradeManager.GetGameTradeId()
+    
+    if not realTradeId then
+        local targetIds = {LocalPlayer.UserId}
+        pcall(function()
+            local TradingFrame = LocalPlayer.PlayerGui.Windows:FindFirstChild("TradingFrame")
+            if TradingFrame then
+                for _, v in pairs(TradingFrame:GetDescendants()) do
+                    if v:IsA("TextLabel") and v.Visible and #v.Text > 2 then
+                        for _, p in pairs(game.Players:GetPlayers()) do
+                            if p ~= LocalPlayer and (v.Text:find(p.Name) or v.Text:find(p.DisplayName)) then
+                                table.insert(targetIds, p.UserId)
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+        realTradeId = targetIds
+    end
+
+    local tradingService = ReplicatedStorage.Packages.Knit.Services.TradingService
+    local remote = tradingService.RF:FindFirstChild("UpdateTradeOffer")
+
+    local function sendUpdate(payload)
+        local data = {
+            MonsterService = {}, 
+            CratesService = {}, 
+            Currencies = {}, 
+            PetsService = {}, 
+            AccessoryService = {}, 
+            ItemsService = {[serviceName] = payload}
+        }
+        
+        if type(realTradeId) == "table" then
+            for _, id in pairs(realTradeId) do 
+                task.spawn(function() 
+                    pcall(function() 
+                        remote:InvokeServer(id, data) 
+                    end) 
+                end) 
+            end
+        else
+            pcall(function() 
+                remote:InvokeServer(realTradeId, data) 
+            end)
+        end
+    end
+
+    TradeManager.IsProcessing = true 
+    local WAIT_TIME = 1.3 
+
+    task.spawn(function()
+        if recipe.Name == "White Strawberry" then
+            StateManager:SetStatus("⏳ Step 1: Baiting (T2 x2)...", THEME.PlayerBtn, statusLabel)
+            sendUpdate({[2] = 2})
+            task.wait(WAIT_TIME)
+            
+            StateManager:SetStatus("🧪 Step 2: Injecting (T1 x" .. amount .. ")...", THEME.BtnDupe, statusLabel)
+            sendUpdate({amount, 1})
+            
+        elseif StateManager.currentDupeTab == "Potions" then
+            local baits = {}
+            for _, req in ipairs(recipe.RequiredTiers) do 
+                baits[tonumber(req)] = 1 
+            end
+            
+            local finalPayload = {}
+            for k, v in pairs(baits) do 
+                finalPayload[k] = v 
+            end
+            finalPayload[targetTier] = amount
+            
+            StateManager:SetStatus("⏳ Step 1: Baiting...", THEME.PlayerBtn, statusLabel)
+            sendUpdate(baits)
+            task.wait(WAIT_TIME)
+            
+            StateManager:SetStatus("🧪 Step 2: Injecting...", THEME.BtnDupe, statusLabel)
+            sendUpdate(finalPayload)
+            
+        else
+            local availableBaits = {}
+            if serviceData then
+                for _, reqTier in ipairs(recipe.RequiredTiers) do
+                    local tNum = tonumber(reqTier)
+                    if tNum > 2 and tNum ~= targetTier then 
+                        local amt = serviceData[tostring(tNum)] or serviceData[tNum] or 0
+                        if amt > 0 then 
+                            table.insert(availableBaits, tNum) 
+                        end
+                    end
+                end
+            end
+            
+            table.sort(availableBaits, function(a, b) return a > b end)
+            
+            if #availableBaits < 2 then
+                StateManager:SetStatus("❌ Need 2 Baits (T3+)", THEME.Fail, statusLabel)
+                TradeManager.IsProcessing = false
+                return
+            end
+            
+            local t1, t2 = availableBaits[1], availableBaits[2]
+            
+            StateManager:SetStatus("⏳ 1/4: Place T" .. t1, THEME.PlayerBtn, statusLabel)
+            sendUpdate({[t1] = 1})
+            task.wait(WAIT_TIME)
+            
+            StateManager:SetStatus("⏳ 2/4: Add T" .. t2, THEME.PlayerBtn, statusLabel)
+            sendUpdate({[t1] = 1, [t2] = 1})
+            task.wait(WAIT_TIME)
+            
+            StateManager:SetStatus("✨ 3/4: SWAP to Target", THEME.BtnDupe, statusLabel)
+            sendUpdate({[targetTier] = amount, [t2] = 1})
+            task.wait(WAIT_TIME + 0.2)
+            
+            StateManager:SetStatus("🔥 4/4: Finishing...", THEME.Success, statusLabel)
+            sendUpdate({[targetTier] = amount})
+        end
+        
+        StateManager:SetStatus("✅ Execution Complete!", THEME.Success, statusLabel)
+        TradeManager.IsProcessing = false 
+    end)
+end
+
+function TradeManager.SpawnSecretList(selectedList, statusLabel)
+    if not Utils.IsTradeActive() then 
+        StateManager:SetStatus("⚠️ Open Trade Menu first!", THEME.Fail, statusLabel)
+        return 
+    end
+    if TradeManager.IsProcessing then return end
+    TradeManager.IsProcessing = true
+    
+    local replica = ReplicaListener:GetReplica()
+    if not replica or not replica.Data then 
+        TradeManager.IsProcessing = false
+        return 
+    end
+    
+    local myMonsters = replica.Data.MonsterService.SavedMonsters or {}
+    
+    -- ✅ 1. สร้างรายการ UUID ทั้งหมดที่เรามี (เป็นอะไหล่)
+    local availableUUIDs = {}
+    for uuid, info in pairs(myMonsters) do
+        table.insert(availableUUIDs, uuid)
+    end
+    
+    -- ✅ 2. นับจำนวน Secret ที่ต้องการ spawn (ไม่รวมที่มีอยู่แล้ว)
+    local targetSecrets = {}
+    for name, info in pairs(selectedList) do
+        for i = 1, info.Count do
+            table.insert(targetSecrets, name)
+        end
+    end
+    
+    -- ✅ 3. ตรวจสอบว่ามี UUID เพียงพอหรือไม่
+    if #targetSecrets > #availableUUIDs then
+        StateManager:SetStatus("❌ Not enough monsters! Need " .. #targetSecrets .. ", have " .. #availableUUIDs, THEME.Fail, statusLabel)
+        TradeManager.IsProcessing = false
+        return
+    end
+    
+    -- ✅ 4. สร้าง Payload: ใช้ UUID แบบสุ่มเป็นอะไหล่ swap
+    local payload = {}
+    for i, targetName in ipairs(targetSecrets) do
+        local uuid = availableUUIDs[i]  -- หยิบ UUID ตามลำดับ
+        if uuid then
+            payload[uuid] = {Name = targetName}
+            print("🔄 Using UUID", uuid, "→ Swap to", targetName)
+        end
+    end
+    
+    -- ✅ 5. ส่ง Trade Signal
+    local realTradeId = TradeManager.GetGameTradeId() or {LocalPlayer.UserId}
+    local remote = ReplicatedStorage.Packages.Knit.Services.TradingService.RF:FindFirstChild("UpdateTradeOffer")
+    local data = {
+        MonsterService = {SavedMonsters = payload}, 
+        CratesService = {}, 
+        Currencies = {}, 
+        PetsService = {}, 
+        AccessoryService = {}, 
+        ItemsService = {}
+    }
+    
+    if type(realTradeId) == "table" then
+        for _, id in pairs(realTradeId) do 
+            task.spawn(function() 
+                pcall(function() 
+                    remote:InvokeServer(id, data) 
+                end) 
+            end) 
+        end
+    else
+        pcall(function() 
+            remote:InvokeServer(realTradeId, data) 
+        end)
+    end
+
+    StateManager:SetStatus("✅ Spawned " .. #targetSecrets .. " secrets!", THEME.Success, statusLabel)
+    TradeManager.IsProcessing = false
+    StateManager:ClearSecretSelection()
+end
+
+-- ========================================== --
+-- Inventory Manager
+-- ========================================== --
+
+function InventoryManager.GetPlayerData()
+    local replica = ReplicaListener:GetReplica()
+    if not replica then return nil end
+    return replica.Data
+end
+
+function InventoryManager.HasItem(service, tier, playerData)
+    if not playerData or not playerData.ItemsService then 
+        return false 
+    end
+    
+    local itemsInventory = playerData.ItemsService.Inventory
+    if not itemsInventory then 
+        return false 
+    end
+    
+    local serviceData = itemsInventory[service]
+    if not serviceData then 
+        return false 
+    end
+    
+    local amount = serviceData[tostring(tier)] or serviceData[tonumber(tier)] or 0
+    return amount > 0
+end
+
+function InventoryManager.GetSecretData()
+    local MonsterInfo = require(ReplicatedStorage.GameInfo.MonsterInfo)
+    local replica = ReplicaListener:GetReplica()
+    
+    local ownedMonsters = {}
+    if replica and replica.Data and replica.Data.MonsterService then
+        local savedMonsters = replica.Data.MonsterService.SavedMonsters or {}
+        for _, info in pairs(savedMonsters) do
+            local mName = (type(info) == "table" and info.Name) or info
+            ownedMonsters[mName] = true
+        end
+    end
+    
+    local secrets = {}
+    for name, info in pairs(MonsterInfo) do
+        if type(info) == "table" and (info.Section == "Secret" or info.Section == "Admin") then
+            table.insert(secrets, {
+                Name = name,
+                ID = info.Image or "0",
+                Section = info.Section,
+                RawInfo = info,
+                IsOwned = ownedMonsters[name] or false
+            })
+        end
+    end
+    
+    table.sort(secrets, function(a, b) return a.Name < b.Name end)
+    return secrets
+end
+
+function InventoryManager.GetMonsterCount()
+    local replica = ReplicaListener:GetReplica()
+    if not replica or not replica.Data then 
+        return 0 
+    end
+    
+    local data = replica.Data
+    if data.MonsterService and data.MonsterService.SavedMonsters then
+        local count = 0
+        for _ in pairs(data.MonsterService.SavedMonsters) do 
+            count = count + 1 
+        end
+        return count
+    end
+    
+    return 0
+end
+
+function InventoryManager.CollectItems(category, playerData)
+    local items = {}
+    
+    local function addItem(name, amount, guid, typeStr, equipped, service, rawInfo, details)
+        table.insert(items, {
+            Name = name, 
+            Amount = amount, 
+            Guid = guid, 
+            Type = typeStr, 
+            Equipped = equipped, 
+            Service = service, 
+            RawInfo = rawInfo, 
+            Details = details
+        })
+    end
+    
+    if category == "Crates" then
+        for name, amount in pairs(playerData.CratesService.Crates or {}) do
+            if Utils.IsHidden(name, "Crates") and amount > 0 then 
+                addItem(name, amount, nil, "Crate", false, "CratesService", nil, "") 
+            end
+        end
+        
+    elseif category == "Secrets" then
+        if playerData.MonsterService.SavedMonsters then
+            for guid, info in pairs(playerData.MonsterService.SavedMonsters) do
+                local name = (type(info) == "table" and info.Name) or info
+                if Utils.IsHidden(name, "Secrets") then 
+                    addItem(
+                        name, 
+                        1, 
+                        guid, 
+                        "Inventory", 
+                        Utils.CheckIsEquipped(guid, name, "Secrets", playerData), 
+                        "MonsterService", 
+                        info, 
+                        ""
+                    ) 
+                end
+            end
+        end
+        
+        if playerData.MonsterService.MonstersUnlocked then
+            for _, name in pairs(playerData.MonsterService.MonstersUnlocked) do
+                if Utils.IsHidden(name, "Secrets") then 
+                    addItem(
+                        name, 
+                        1, 
+                        nil, 
+                        "Wikipedia", 
+                        Utils.CheckIsEquipped(nil, name, "Secrets", playerData), 
+                        "MonsterService", 
+                        nil, 
+                        ""
+                    ) 
+                end
+            end
+        end
+        
+    else
+        local path = (category == "Pets" and playerData.PetsService.Pets) or 
+                     playerData.AccessoryService.Accessories
+        local service = (category == "Pets" and "PetsService") or "AccessoryService"
+        
+        for guid, info in pairs(path or {}) do
+            local name = (type(info) == "table" and info.Name) or info
+            if Utils.IsHidden(name, category) then 
+                addItem(
+                    name, 
+                    1, 
+                    guid, 
+                    "Normal", 
+                    Utils.CheckIsEquipped(guid, name, category, playerData), 
+                    service, 
+                    info, 
+                    Utils.GetItemDetails(info, category)
+                ) 
+            end
+        end
+    end
+    
+    table.sort(items, function(a, b) 
+        if a.Equipped ~= b.Equipped then 
+            return a.Equipped 
+        end
+        if a.Type ~= b.Type then 
+            return a.Type == "Inventory" 
+        end
+        return a.Name < b.Name 
+    end)
+    
+    return items
+end
+
+-- ========================================== --
+-- Main GUI Controller
+-- ========================================== --
+local GUI = {}
+
+function GUI:Initialize()
+    self.ScreenGui = Instance.new("ScreenGui")
+    self.ScreenGui.Name = CONFIG.GUI_NAME
+    self.ScreenGui.Parent = CoreGui
+    self.ScreenGui.DisplayOrder = 100
+    self.ScreenGui.IgnoreGuiInset = true
+    
+    self:CreateMiniIcon()
+    self:CreateMainWindow()
+    self:SetupKeybind()
+    self:StartMonitoring()
+end
+
+function GUI:CreateMiniIcon()
+    self.MiniIcon = UIFactory.CreateButton({
+        Size = CONFIG.MINI_ICON_SIZE, 
+        Position = UDim2.new(0, 20, 0.5, -25), 
+        BgColor = THEME.MainBg,
+        Text = "T", 
+        TextColor = THEME.BtnSelected, 
+        Font = Enum.Font.GothamBold, 
+        TextSize = 32,
+        Parent = self.ScreenGui, 
+        Corner = true, 
+        CornerRadius = 10, 
+        OnClick = function() 
+            self:ToggleWindow("Open") 
+        end
+    })
+    
+    self.MiniIcon.Visible = false
+    UIFactory.AddStroke(self.MiniIcon, THEME.BtnSelected, 2)
+    UIFactory.MakeDraggable(self.MiniIcon, self.MiniIcon)
+end
+
+function GUI:CreateMainWindow()
+    self.MainFrame = UIFactory.CreateFrame({
+        Size = CONFIG.MAIN_WINDOW_SIZE, 
+        Position = UDim2.new(0.5, -400, 0.5, -250),
+        BgColor = THEME.MainBg, 
+        BgTransparency = THEME.MainTransparency, 
+        Parent = self.ScreenGui, 
+        Stroke = true
+    })
+    
+    self.MainFrame.Active = true
+    self:CreateTitleBar()
+    self:CreateStatusBar()
+    self:CreateSidebar()
+    self:CreateCenterPanel()
+    self:CreateRightPanel()
+    self:CreatePopup()
+    self:UpdateUIState()
+end
+
+function GUI:CreateTitleBar()
+    local titleBar = UIFactory.CreateFrame({
+        Size = UDim2.new(1, 0, 0, 40), 
+        BgColor = Color3.fromRGB(0, 0, 0), 
+        BgTransparency = 0.7, 
+        Parent = self.MainFrame, 
+        CornerRadius = 12
+    })
+    
+    UIFactory.CreateLabel({
+        Text = "  🎯 Universal Trader (V" .. CONFIG.VERSION .. ")", 
+        Size = UDim2.new(0.6, 0, 1, 0), 
+        TextXAlign = Enum.TextXAlignment.Left, 
+        Font = Enum.Font.GothamBold, 
+        TextSize = 16, 
+        Parent = titleBar
+    })
+    
+    UIFactory.CreateButton({
+        Size = UDim2.new(0, 30, 0, 30), 
+        Position = UDim2.new(1, -35, 0, 5), 
+        Text = "X", 
+        BgColor = THEME.ItemEquip, 
+        Font = Enum.Font.GothamBold, 
+        CornerRadius = 6, 
+        Parent = titleBar, 
+        OnClick = function() 
+            self.ScreenGui:Destroy() 
+        end
+    })
+    
+    UIFactory.CreateButton({
+        Size = UDim2.new(0, 30, 0, 30), 
+        Position = UDim2.new(1, -70, 0, 5), 
+        Text = "-", 
+        BgColor = THEME.BtnMainTab, 
+        Font = Enum.Font.GothamBold, 
+        TextSize = 20, 
+        CornerRadius = 6, 
+        Parent = titleBar, 
+        OnClick = function() 
+            self:ToggleWindow("Minimize") 
+        end
+    })
+    
+    UIFactory.MakeDraggable(titleBar, self.MainFrame)
+end
+
+function GUI:CreateStatusBar()
+    self.StatusLabel = UIFactory.CreateLabel({
+        Size = UDim2.new(1, -20, 0, 20), 
+        Position = UDim2.new(0, 10, 1, -25), 
+        Text = "Select a mode.", 
+        TextColor = THEME.TextGray, 
+        TextSize = 12, 
+        TextXAlign = Enum.TextXAlignment.Left, 
+        Parent = self.MainFrame
+    })
+end
+
+function GUI:CreateSidebar()
+    local sidebar = UIFactory.CreateFrame({
+        Size = UDim2.new(0, CONFIG.SIDEBAR_WIDTH, 1, -80), 
+        Position = UDim2.new(0, 10, 0, 50), 
+        Parent = self.MainFrame
+    })
+    
+    local mainMenuContainer = UIFactory.CreateFrame({
+        Size = UDim2.new(1, 0, 0, 120), 
+        BgTransparency = 1, 
+        Parent = sidebar, 
+        Corner = false
+    })
+    
+    local mainLayout = Instance.new("UIListLayout", mainMenuContainer)
+    mainLayout.Padding = UDim.new(0, CONFIG.BUTTON_PADDING)
+    mainLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    
+    local padding = Instance.new("UIPadding", mainMenuContainer)
+    padding.PaddingTop = UDim.new(0, 10)
+    
+    self.SubMenuFrame = UIFactory.CreateFrame({
+        Size = UDim2.new(1, 0, 1, -130), 
+        Position = UDim2.new(0, 0, 0, 130), 
+        BgTransparency = 1, 
+        Parent = sidebar, 
+        Corner = false
+    })
+    self.SubMenuFrame.Visible = false
+    
+    local subLayout = Instance.new("UIListLayout", self.SubMenuFrame)
+    subLayout.Padding = UDim.new(0, CONFIG.BUTTON_PADDING)
+    subLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    
+    local line = Instance.new("Frame")
+    line.Size = UDim2.new(0.8, 0, 0, 1)
+    line.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    line.BorderSizePixel = 0
+    line.Position = UDim2.new(0.1, 0, 0, 125)
+    line.Parent = sidebar
+    
+    self:CreateMainTabs(mainMenuContainer)
+    self:CreateSubTabs(self.SubMenuFrame)
+end
+
+function GUI:CreateMainTabs(parent)
+    self.MainTabButtons = {}
+    local tabs = {
+        {name = "Players", icon = "👥"}, 
+        {name = "Trade", icon = "🎁"}, 
+        {name = "Dupe", icon = "✨"}
+    }
+    
+    for _, tab in ipairs(tabs) do
+        local btn = UIFactory.CreateButton({
+            Size = UDim2.new(0, 100, 0, 30), 
+            Text = tab.icon .. " " .. tab.name, 
+            Font = Enum.Font.GothamBold, 
+            TextSize = 13, 
+            CornerRadius = 6, 
+            Parent = parent, 
+            OnClick = function() 
+                StateManager.currentMainTab = tab.name
+                self:UpdateUIState() 
+            end
+        })
+        self.MainTabButtons[tab.name] = btn
+    end
+end
+
+function GUI:CreateSubTabs(parent) 
+    self.SubTabButtons = {} 
+end
+
+function GUI:UpdateSubTabs()
+    for _, child in pairs(self.SubMenuFrame:GetChildren()) do 
+        if child:IsA("TextButton") then 
+            child:Destroy() 
+        end 
+    end
+    
+    self.SubTabButtons = {}
+    local tabs = {}
+    
+    if StateManager.currentMainTab == "Trade" then
+        tabs = {"Pets", "Secrets", "Accessories", "Crates"}
+    elseif StateManager.currentMainTab == "Dupe" then
+        tabs = {"Scrolls", "Tickets", "Potions", "Secrets"}
+    end
+    
+    for _, tabName in ipairs(tabs) do
+        local isSelected = (StateManager.currentMainTab == "Trade" and StateManager.currentSubTab == tabName) or 
+                          (StateManager.currentMainTab == "Dupe" and StateManager.currentDupeTab == tabName)
+        
+        local btn = UIFactory.CreateButton({
+            Size = UDim2.new(0, 100, 0, 25), 
+            Text = tabName, 
+            TextSize = 12, 
+            CornerRadius = 6, 
+            Parent = self.SubMenuFrame,
+            OnClick = function()
+                if StateManager.currentMainTab == "Trade" then 
+                    StateManager.currentSubTab = tabName
+                else 
+                    StateManager.currentDupeTab = tabName 
+                end
+                self:UpdateUIState()
+            end
+        })
+        
+        btn.BackgroundColor3 = isSelected and THEME.BtnSelected or THEME.BtnDefault
+        btn.TextColor3 = isSelected and Color3.new(1,1,1) or THEME.TextGray
+        self.SubTabButtons[tabName] = btn
+    end
+end
+
+function GUI:CreateCenterPanel()
+    self.InvFrame = UIFactory.CreateFrame({
+        Size = UDim2.new(0.79, 0, 1, -80), 
+        Position = UDim2.new(0, 140, 0, 50), 
+        Parent = self.MainFrame
+    })
+    
+    self.InvHeader = UIFactory.CreateLabel({
+        Size = UDim2.new(1, 0, 0, 30), 
+        Text = "List", 
+        Font = Enum.Font.GothamBold, 
+        TextSize = 12, 
+        Parent = self.InvFrame
+    })
+    
+    self.InvContainer = UIFactory.CreateScrollingFrame({
+        Parent = self.InvFrame, 
+        Size = UDim2.new(1, -10, 1, -35)
+    })
+    
+    self.DupeWarning = UIFactory.CreateLabel({
+        Size = UDim2.new(1, -20, 0, 55), 
+        Position = UDim2.new(0, 10, 1, -60), 
+        Text = "", 
+        TextColor = Color3.fromRGB(255, 100, 100), 
+        Font = Enum.Font.GothamBold, 
+        TextSize = 10, 
+        Parent = self.InvFrame, 
+        Visible = false
+    })
+    self.DupeWarning.TextWrapped = true
+    
+    self.SecretExecuteBtn = UIFactory.CreateButton({
+        Size = UDim2.new(0, 200, 0, 40), 
+        Position = UDim2.new(0.5, -100, 1, -50),
+        Text = "SPAWN SELECTED", 
+        BgColor = THEME.BtnDupe, 
+        Font = Enum.Font.GothamBold, 
+        TextSize = 14,
+        Parent = self.InvFrame, 
+        CornerRadius = 8, 
+        Visible = false,
+        OnClick = function()
+            local selected = StateManager.selectedSecrets
+            if next(selected) == nil then
+                StateManager:SetStatus("⚠️ Select items first!", THEME.Fail, self.StatusLabel)
+            else
+                TradeManager.SpawnSecretList(selected, self.StatusLabel)
+                self:RefreshInventory()
+            end
+        end
+    })
+    
+    UIFactory.AddStroke(self.SecretExecuteBtn, Color3.new(1,1,1), 2, 0.5)
+end
+
+function GUI:CreateRightPanel()
+    self.TradeFrame = UIFactory.CreateFrame({
+        Size = UDim2.new(0.35, 0, 1, -80), 
+        Parent = self.MainFrame
+    })
+    self.TradeFrame.Visible = false
+    
+    UIFactory.CreateLabel({
+        Size = UDim2.new(1, 0, 0, 30), 
+        Text = "Current Offer", 
+        TextColor = THEME.ItemInv, 
+        Font = Enum.Font.GothamBold, 
+        TextSize = 12, 
+        Parent = self.TradeFrame
+    })
+    
+    self.TradeContainer = UIFactory.CreateScrollingFrame({
+        Parent = self.TradeFrame, 
+        ScrollBarThickness = 0
+    })
+    
+    local layout = Instance.new("UIListLayout", self.TradeContainer)
+    layout.Padding = UDim.new(0, 3)
+end
+
+function GUI:CreatePopup()
+    self.PopupFrame = UIFactory.CreateFrame({
+        Size = UDim2.new(1, 0, 1, 0), 
+        BgColor = Color3.new(0, 0, 0), 
+        BgTransparency = 0.85, 
+        Parent = self.MainFrame, 
+        Corner = false
+    })
+    self.PopupFrame.Visible = false
+    self.PopupFrame.ZIndex = 200
+    
+    local popupBox = UIFactory.CreateFrame({
+        Size = UDim2.new(0, 200, 0, 120), 
+        Position = UDim2.new(0.5, -100, 0.5, -60), 
+        BgColor = THEME.MainBg, 
+        BgTransparency = 0.1, 
+        Parent = self.PopupFrame, 
+        CornerRadius = 8
+    })
+    
+    UIFactory.AddStroke(popupBox, THEME.BtnSelected, 1, 0.3)
+    
+    self.PopupInput = Instance.new("TextBox")
+    self.PopupInput.Size = UDim2.new(0.8, 0, 0, 30)
+    self.PopupInput.Position = UDim2.new(0.1, 0, 0.3, 0)
+    self.PopupInput.Text = "1"
+    self.PopupInput.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+    self.PopupInput.BackgroundTransparency = 0.5
+    self.PopupInput.TextColor3 = Color3.new(1, 1, 1)
+    self.PopupInput.Parent = popupBox
+    UIFactory.AddCorner(self.PopupInput, 4)
+    
+    self.PopupConfirm = UIFactory.CreateButton({
+        Size = UDim2.new(0.8, 0, 0, 30), 
+        Position = UDim2.new(0.1, 0, 0.65, 0), 
+        Text = "Confirm", 
+        BgColor = THEME.BtnSelected, 
+        CornerRadius = 4, 
+        Parent = popupBox
+    })
+    
+    UIFactory.CreateButton({
+        Size = UDim2.new(0, 20, 0, 20), 
+        Position = UDim2.new(1, -25, 0, 5), 
+        Text = "X", 
+        BgColor = THEME.ItemEquip, 
+        CornerRadius = 4, 
+        Parent = popupBox, 
+        OnClick = function() 
+            self.PopupFrame.Visible = false 
+        end
+    })
+end
+
+function GUI:ShowQuantityPopup(itemData, onConfirm)
+    self.PopupFrame.Visible = true
+    local startValue = itemData.Default or 1
+    local maxValue = itemData.Max or 1
+    self.PopupInput.Text = tostring(startValue)
+    
+    if StateManager.inputConnection then 
+        StateManager.inputConnection:Disconnect() 
+    end
+    
+    StateManager.inputConnection = Utils.SanitizeNumberInput(self.PopupInput, maxValue)
+    
+    local confirmConn
+    confirmConn = self.PopupConfirm.MouseButton1Click:Connect(function()
+        local quantity = tonumber(self.PopupInput.Text)
+        if quantity and quantity > 0 and quantity <= maxValue then 
+            onConfirm(quantity)
+            self.PopupFrame.Visible = false
+            if StateManager.inputConnection then 
+                StateManager.inputConnection:Disconnect() 
+            end 
+        end
+        confirmConn:Disconnect()
+    end)
+end
+
+function GUI:ToggleWindow(state)
+    if state == "Minimize" then 
+        self.MainFrame.Visible = false
+        self.MiniIcon.Visible = true
+    elseif state == "Open" then 
+        self.MainFrame.Visible = true
+        self.MiniIcon.Visible = false
+    elseif state == "Toggle" then 
+        if self.MainFrame.Visible then 
+            self:ToggleWindow("Minimize") 
+        else 
+            self:ToggleWindow("Open") 
+        end 
+    end
+end
+
+function GUI:SetupKeybind() 
+    UserInputService.InputBegan:Connect(function(input, gp) 
+        if not gp and input.KeyCode == CONFIG.TOGGLE_KEY then 
+            self:ToggleWindow("Toggle") 
+        end 
+    end) 
+end
+
+function GUI:UpdateUIState()
+    self:UpdateSubTabs()
+    self.DupeWarning.Visible = false
+    self.InvContainer.Size = UDim2.new(1, -10, 1, -35)
+    self.SecretExecuteBtn.Visible = false
+
+    if StateManager.currentMainTab == "Players" then
+        self.SubMenuFrame.Visible = false
+        self.TradeFrame.Visible = false
+        self.InvFrame.Size = UDim2.new(1, -150, 1, -80)
+        self.InvHeader.Text = "Server Players (Force Trade)"
+        
+    elseif StateManager.currentMainTab == "Trade" then
+        self.SubMenuFrame.Visible = true
+        self.TradeFrame.Visible = true
+        self.InvFrame.Size = UDim2.new(0, 320, 1, -80)
+        self.TradeFrame.Position = UDim2.new(0, 140 + 320 + 10, 0, 50)
+        self.TradeFrame.Size = UDim2.new(0, 320, 1, -80)
+        self.InvHeader.Text = "Selection List (" .. StateManager.currentSubTab .. ")"
+        
+    elseif StateManager.currentMainTab == "Dupe" then
+        self.SubMenuFrame.Visible = true
+        self.TradeFrame.Visible = false
+        self.InvFrame.Size = UDim2.new(1, -150, 1, -80)
+        self.InvHeader.Text = "✨ Magic Dupe (" .. StateManager.currentDupeTab .. ")"
+        
+        if StateManager.currentDupeTab == "Secrets" then
+            self.InvContainer.Size = UDim2.new(1, -10, 1, -60)
+            self.SecretExecuteBtn.Visible = true
+        else
+            self.DupeWarning.Visible = true
+            self.InvContainer.Size = UDim2.new(1, -10, 1, -95)
+            
+            local limitInfo = ""
+            if StateManager.currentDupeTab == "Scrolls" then 
+                limitInfo = "SCROLLS LIMIT: 1XX"
+            elseif StateManager.currentDupeTab == "Tickets" then 
+                limitInfo = "TICKETS LIMIT: 10,000"
+            elseif StateManager.currentDupeTab == "Potions" then 
+                limitInfo = "POTIONS & WHITE STRAWBERRY LIMIT: 2,000" 
+            end
+            
+            self.DupeWarning.Text = string.format(
+                "⚠️ WARNING: Always use the item once after dupe is finished.\n%s TOTAL. DO NOT EXCEED THIS LIMIT!\nRisk of ban if hoarding excessive amounts.", 
+                limitInfo
+            )
+        end
+    end
+    
+    for name, btn in pairs(self.MainTabButtons) do
+        local isSelected = (name == StateManager.currentMainTab)
+        btn.BackgroundColor3 = isSelected and THEME.BtnMainTabSelected or THEME.BtnMainTab
+        
+        if name == "Dupe" and isSelected then 
+            btn.BackgroundColor3 = THEME.BtnDupe 
+        end 
+        
+        btn.TextColor3 = isSelected and Color3.new(1, 1, 1) or THEME.TextGray
+    end
+    
+    self:RefreshInventory()
+end
+
+function GUI:RefreshInventory()
+    for _, child in pairs(self.InvContainer:GetChildren()) do
+        if child:IsA("GuiObject") or child:IsA("UIListLayout") or child:IsA("UIGridLayout") then
+            child:Destroy()
+        end
+    end
+    
+    self.InvContainer.ScrollBarThickness = 3
+    
+    if StateManager.currentMainTab == "Players" then
+        local layout = Instance.new("UIListLayout", self.InvContainer)
+        layout.Padding = UDim.new(0, CONFIG.LIST_PADDING)
+        self:RenderPlayersList()
+        
+    elseif StateManager.currentMainTab == "Trade" then
+        local layout = Instance.new("UIListLayout", self.InvContainer)
+        layout.Padding = UDim.new(0, CONFIG.LIST_PADDING)
+        self:RenderTradeItems()
+        
+    elseif StateManager.currentMainTab == "Dupe" then
+        self:RenderDupeMenu()
+    end
+end
+
+function GUI:RenderDupeMenu()
+    if StateManager.currentDupeTab == "Secrets" then
+        self.InvContainer.ScrollBarThickness = 0
+        
+        local currentCount = InventoryManager.GetMonsterCount()
+        local selectedCount = 0
+        for _, info in pairs(StateManager.selectedSecrets) do
+            selectedCount = selectedCount + info.Count
+        end
+
+        -- ✅ อัปเดต Header
+        self.InvHeader.Text = string.format(
+            "✨ Secrets | Have: %d | Selected: %d | Available: %d",
+            currentCount,
+            selectedCount,
+            currentCount - selectedCount
+        )
+        
+        local grid = Instance.new("UIGridLayout", self.InvContainer)
+        grid.CellSize = UDim2.new(0, 95, 0, 115)
+        grid.CellPadding = UDim2.new(0, 10, 0, 10)
+        grid.SortOrder = Enum.SortOrder.LayoutOrder
+        grid.HorizontalAlignment = Enum.HorizontalAlignment.Center 
+        
+        local padding = Instance.new("UIPadding", self.InvContainer)
+        padding.PaddingTop = UDim.new(0, 20)
+        padding.PaddingBottom = UDim.new(0, 20)
+        padding.PaddingLeft = UDim.new(0, 10)
+        padding.PaddingRight = UDim.new(0, 10)
+        
+        local secrets = InventoryManager.GetSecretData()
+        
+        for _, data in ipairs(secrets) do
+            local name = data.Name
+            local isSelected = StateManager.selectedSecrets[name] ~= nil
+            local count = isSelected and StateManager.selectedSecrets[name].Count or 0
+            local isOwned = data.IsOwned
+            
+            local Card = Instance.new("Frame")
+            Card.Parent = self.InvContainer
+            Card.BackgroundColor3 = THEME.CardBg
+            
+            if isOwned then
+                Card.BackgroundTransparency = 0.5
+            end
+            
+            local CardCorner = Instance.new("UICorner", Card)
+            CardCorner.CornerRadius = UDim.new(0, 6)
+            
+            local stroke = Instance.new("UIStroke", Card)
+            stroke.Thickness = isOwned and 3 or 2
+            
+            if isOwned then
+                stroke.Color = Color3.fromRGB(255, 50, 50)
+                stroke.Transparency = 0
+            else
+                stroke.Color = isSelected and THEME.CardSelected or Color3.fromRGB(60,60,60)
+                stroke.Transparency = isSelected and 0 or 0.6
+            end
+            
+            local Image = Instance.new("ImageLabel", Card)
+            Image.BackgroundTransparency = 1
+            Image.Position = UDim2.new(0, 4, 0, 4)
+            Image.Size = UDim2.new(1, -8, 0, 65)
+            Image.Image = "rbxassetid://" .. tostring(data.ID)
+            Image.ScaleType = Enum.ScaleType.Fit
+            
+            if isOwned then
+                Image.ImageTransparency = 0.6
+            end
+            
+            local ImgCorner = Instance.new("UICorner", Image)
+            ImgCorner.CornerRadius = UDim.new(0, 4)
+            
+            local Tag = Instance.new("TextLabel", Image)
+            Tag.BackgroundColor3 = (data.Section == "Admin") and THEME.TagAdmin or THEME.TagSecret
+            Tag.Size = UDim2.new(0, 35, 0, 10)
+            Tag.Position = UDim2.new(1, -37, 1, -12)
+            Tag.Font = Enum.Font.GothamBold
+            Tag.Text = (data.Section == "Admin") and "ADMIN" or "SECRET"
+            Tag.TextColor3 = Color3.new(1,1,1)
+            Tag.TextSize = 7
+            local TagCorner = Instance.new("UICorner", Tag)
+            TagCorner.CornerRadius = UDim.new(0, 3)
+            
+            if isOwned then
+                local OwnedBadge = Instance.new("TextLabel", Card)
+                OwnedBadge.Size = UDim2.new(0, 50, 0, 18)
+                OwnedBadge.Position = UDim2.new(0.5, -25, 0, 4)
+                OwnedBadge.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+                OwnedBadge.TextColor3 = Color3.new(1,1,1)
+                OwnedBadge.Font = Enum.Font.GothamBold
+                OwnedBadge.TextSize = 9
+                OwnedBadge.Text = "OWNED"
+                OwnedBadge.ZIndex = 10
+                local OwnedCorner = Instance.new("UICorner", OwnedBadge)
+                OwnedCorner.CornerRadius = UDim.new(0, 4)
+            end
+            
+            local NameLbl = Instance.new("TextLabel", Card)
+            NameLbl.BackgroundTransparency = 1
+            NameLbl.Position = UDim2.new(0, 4, 0, 74)
+            NameLbl.Size = UDim2.new(1, -8, 0, 35)
+            NameLbl.Font = Enum.Font.Gotham
+            NameLbl.Text = name
+            NameLbl.TextColor3 = isOwned and Color3.fromRGB(150, 150, 150) or Color3.fromRGB(220, 220, 220)
+            NameLbl.TextSize = 9
+            NameLbl.TextWrapped = true
+            NameLbl.TextYAlignment = Enum.TextYAlignment.Top
+            
+            if isSelected and not isOwned then
+                local CountBadge = Instance.new("TextLabel", Card)
+                CountBadge.Size = UDim2.new(0, 24, 0, 24)
+                CountBadge.Position = UDim2.new(1, -24, 0, 0)
+                CountBadge.BackgroundColor3 = THEME.BtnSelected
+                CountBadge.TextColor3 = Color3.new(1,1,1)
+                CountBadge.Font = Enum.Font.GothamBold
+                CountBadge.TextSize = 10
+                CountBadge.Text = "x" .. count
+                CountBadge.ZIndex = 10
+                local BadgeCorner = Instance.new("UICorner", CountBadge)
+                BadgeCorner.CornerRadius = UDim.new(0, 12)
+            end
+
+            local btn = Instance.new("TextButton", Card)
+            btn.Size = UDim2.new(1,0,1,0)
+            btn.BackgroundTransparency = 1
+            btn.Text = ""
+            
+            if not isOwned then
+                btn.MouseButton1Click:Connect(function()
+                    StateManager:ToggleSecretSelection(data, self.StatusLabel)
+                    self:RefreshInventory() 
+                end)
+
+                btn.MouseButton2Click:Connect(function()
+                    StateManager:DecreaseSecretSelection(data)
+                    self:RefreshInventory()
+                end)
+            else
+                btn.MouseButton1Click:Connect(function()
+                    StateManager:SetStatus(
+                        "❌ Cannot spawn: " .. name .. " is already in your inventory!", 
+                        Color3.fromRGB(255, 85, 85), 
+                        self.StatusLabel
+                    )
+                end)
+            end
+        end
+        
+        local rows = math.ceil(#secrets / 5)
+        self.InvContainer.CanvasSize = UDim2.new(0, 0, 0, rows * 125)
+        
+    else
+        local layout = Instance.new("UIListLayout", self.InvContainer)
+        layout.Padding = UDim.new(0, CONFIG.LIST_PADDING)
+        
+        local recipes = DUPE_RECIPES[StateManager.currentDupeTab] or {}
+        local playerData = InventoryManager.GetPlayerData()
+        local yOffset = 0
+        local isPotionTab = (StateManager.currentDupeTab == "Potions")
+        
+        for _, recipe in ipairs(recipes) do
+            local recipeFrame = UIFactory.CreateFrame({
+                Size = UDim2.new(1, 0, 0, 65), 
+                BgColor = Color3.fromRGB(30, 30, 35),
+                Parent = self.InvContainer, 
+                CornerRadius = 6, 
+                Stroke = true, 
+                StrokeColor = Color3.fromRGB(60, 60, 70)
+            })
+            
+            local displayIcon = "✨"
+            local itemTypeSingular, itemTypePlural = "Item", "Items"
+            local serviceName = recipe.Service
+            
+            if StateManager.currentDupeTab == "Scrolls" then 
+                displayIcon = "📜"
+                itemTypeSingular, itemTypePlural = "Scroll", "Scrolls"
+            elseif StateManager.currentDupeTab == "Tickets" then 
+                displayIcon = "🎟️"
+                itemTypeSingular, itemTypePlural = "Ticket", "Tickets"
+            elseif isPotionTab then
+                if recipe.Name == "White Strawberry" then 
+                    displayIcon = "🍓" 
+                else 
+                    displayIcon = "🧪" 
+                end
+                itemTypeSingular, itemTypePlural = "Potion", "Potions"
+            end
+            
+            UIFactory.CreateLabel({
+                Size = UDim2.new(1, -120, 0, 25), 
+                Position = UDim2.new(0, 10, 0, 5),
+                Text = displayIcon .. " " .. recipe.Name, 
+                TextXAlign = Enum.TextXAlignment.Left,
+                Font = Enum.Font.GothamBold, 
+                TextSize = 14, 
+                TextColor = THEME.BtnDupe, 
+                Parent = recipeFrame
+            })
+            
+            local isOwned = false
+            if playerData and playerData.ItemsService and playerData.ItemsService.Inventory then
+                local inv = playerData.ItemsService.Inventory[serviceName]
+                if inv then
+                    local amt = inv[tostring(recipe.Tier)] or inv[tonumber(recipe.Tier)] or 0
+                    if amt > 0 then 
+                        isOwned = true 
+                    end
+                end
+            end
+            
+            local totalNeeded = 0
+            local foundCount = 0
+            
+            if isPotionTab then
+                totalNeeded = #recipe.RequiredTiers
+                for _, tier in ipairs(recipe.RequiredTiers) do 
+                    if InventoryManager.HasItem(serviceName, tier, playerData) then 
+                        foundCount = foundCount + 1 
+                    end 
+                end
+            else
+                totalNeeded = 2
+                for _, tier in ipairs(recipe.RequiredTiers) do
+                    local tierNum = tonumber(tier)
+                    if tierNum > 2 and tierNum ~= tonumber(recipe.Tier) then 
+                        if InventoryManager.HasItem(serviceName, tierNum, playerData) then 
+                            foundCount = foundCount + 1 
+                        end 
+                    end
+                end
+            end
+            
+            local missingCount = totalNeeded - math.min(foundCount, totalNeeded)
+            local reqLabel = "Requires: " .. totalNeeded .. " other " .. 
+                            (totalNeeded > 1 and itemTypePlural or itemTypeSingular)
+            local statusText = ""
+            local statusColor = THEME.Success
+            
+            if isOwned then 
+                statusText = "Already Owned: Remove from inventory first"
+                statusColor = THEME.Fail
+            elseif missingCount > 0 then 
+                statusText = reqLabel .. " (Missing: " .. missingCount .. " " .. 
+                            (missingCount > 1 and itemTypePlural or itemTypeSingular) .. ")"
+                statusColor = THEME.Fail
+            else 
+                statusText = reqLabel .. " (Ready)"
+                statusColor = THEME.Success 
+            end
+            
+            UIFactory.CreateLabel({
+                Size = UDim2.new(1, -120, 0, 20), 
+                Position = UDim2.new(0, 10, 0, 30), 
+                Text = statusText, 
+                TextXAlign = Enum.TextXAlignment.Left, 
+                TextSize = 11, 
+                TextColor = statusColor, 
+                Parent = recipeFrame
+            })
+            
+            local canExecute = (not isOwned) and (missingCount == 0)
+            
+            UIFactory.CreateButton({
+                Size = UDim2.new(0, 80, 0, 30), 
+                Position = UDim2.new(1, -90, 0.5, -15), 
+                Text = "DUPE",
+                BgColor = canExecute and THEME.BtnDupe or THEME.BtnDisabled, 
+                TextColor = canExecute and THEME.TextWhite or THEME.TextDisabled,
+                Font = Enum.Font.GothamBold, 
+                TextSize = 13, 
+                CornerRadius = 4, 
+                Parent = recipeFrame,
+                OnClick = function()
+                    if TradeManager.IsProcessing then 
+                        return 
+                    end 
+                    
+                    if not Utils.IsTradeActive() then 
+                        StateManager:SetStatus("⚠️ Open Trade Menu first!", THEME.Fail, self.StatusLabel) 
+                        return 
+                    end
+                    
+                    if isOwned then 
+                        StateManager:SetStatus("❌ You already have " .. recipe.Name, THEME.Fail, self.StatusLabel) 
+                        return 
+                    end
+                    
+                    if canExecute then
+                        local startVal = 99
+                        local currentMax = 100
+                        
+                        if StateManager.currentDupeTab == "Scrolls" then 
+                            startVal = 99
+                            currentMax = 120
+                        elseif StateManager.currentDupeTab == "Tickets" then 
+                            startVal = 5000
+                            currentMax = 10000 
+                        elseif StateManager.currentDupeTab == "Potions" then 
+                            startVal = 500
+                            currentMax = 1000 
+                        end
+                        
+                        self:ShowQuantityPopup({Default = startVal, Max = currentMax}, function(quantity)
+                            TradeManager.ExecuteMagicDupe(recipe, self.StatusLabel, quantity)
+                        end)
+                    end
+                end
+            })
+            
+            yOffset = yOffset + 70
+        end
+        
+        self.InvContainer.CanvasSize = UDim2.new(0, 0, 0, yOffset)
+    end
+end
+
+function GUI:RenderPlayersList()
+    StateManager.playerButtons = {}
+    local isTrading = Utils.IsTradeActive()
+    local count = 0
+    
+    for _, plr in pairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            local btn = UIFactory.CreateButton({
+                Size = UDim2.new(1, 0, 0, 35), 
+                BgColor = Color3.fromRGB(35, 35, 40), 
+                BgTransparency = 0.2,
+                Text = "  👤 " .. plr.DisplayName .. " (@" .. plr.Name .. ")", 
+                TextColor = THEME.PlayerBtn, 
+                Font = Enum.Font.GothamBold, 
+                TextSize = 13, 
+                TextXAlign = Enum.TextXAlignment.Left, 
+                CornerRadius = 6, 
+                Parent = self.InvContainer
+            })
+            
+            local actionBtn = UIFactory.CreateButton({
+                Size = UDim2.new(0, 80, 0, 25), 
+                Position = UDim2.new(1, -85, 0, 5), 
+                Text = "TRADE",
+                BgColor = isTrading and THEME.BtnDisabled or THEME.BtnSelected, 
+                TextColor = isTrading and THEME.TextDisabled or THEME.TextWhite, 
+                Font = Enum.Font.GothamBold, 
+                CornerRadius = 4, 
+                Parent = btn
+            })
+            
+            actionBtn.AutoButtonColor = not isTrading
+            table.insert(StateManager.playerButtons, actionBtn)
+            actionBtn:SetAttribute("OriginalColor", THEME.BtnSelected)
+            actionBtn:SetAttribute("OriginalTextColor", THEME.TextWhite)
+            
+            actionBtn.MouseButton1Click:Connect(function()
+                if Utils.IsTradeActive() then 
+                    StateManager:SetStatus("🔒 Trade is active! Finish it first.", THEME.ItemEquip, self.StatusLabel) 
+                    return 
+                end
+                TradeManager.ForceTradeWith(plr, self.StatusLabel)
+            end)
+            
+            count = count + 1
+        end
+    end
+    
+    self.InvContainer.CanvasSize = UDim2.new(0, 0, 0, count * 38)
+end
+
+function GUI:RenderTradeItems()
+    local playerData = InventoryManager.GetPlayerData()
+    if not playerData then 
+        return 
+    end
+    
+    local items = InventoryManager.CollectItems(StateManager.currentSubTab, playerData)
+    
+    for _, item in ipairs(items) do
+        local key = item.Guid or item.Name
+        local inTrade = StateManager:IsInTrade(key)
+        
+        local prefix, textColor, bgColor, tag = ITEM_PREFIXES.Inventory, THEME.ItemInv, Color3.fromRGB(30, 35, 40), ""
+        
+        if item.Equipped then 
+            prefix = ITEM_PREFIXES.Equipped
+            textColor = THEME.ItemEquip
+            bgColor = Color3.fromRGB(50, 20, 20)
+            tag = " [EQUIPPED]"
+        elseif inTrade then 
+            prefix = ITEM_PREFIXES.InTrade
+            textColor = THEME.ItemInTrade
+            bgColor = Color3.fromRGB(60, 50, 20)
+            tag = (item.Type == "Crate") and (" [SENT: " .. StateManager.itemsInTrade[key].Amount .. "]") or " [IN TRADE]"
+        elseif item.Type == "Wikipedia" then 
+            prefix = ITEM_PREFIXES.Wikipedia
+            textColor = THEME.ItemWiki
+            bgColor = Color3.fromRGB(35, 30, 50) 
+        end
+        
+        local showAmt = (item.Amount > 1) and (" [x" .. item.Amount .. "]") or ""
+        
+        local btn = UIFactory.CreateButton({
+            Size = UDim2.new(1, 0, 0, 35), 
+            Text = " " .. prefix .. item.Name .. (item.Details or "") .. tag .. showAmt,
+            TextColor = textColor, 
+            BgColor = bgColor, 
+            BgTransparency = 0.4, 
+            TextSize = 13, 
+            TextXAlign = Enum.TextXAlignment.Left, 
+            CornerRadius = 6, 
+            Parent = self.InvContainer
+        })
+        
+        if not item.Equipped then
+            btn.MouseButton1Click:Connect(function()
+                local itemData = {
+                    Name = item.Name, 
+                    Guid = item.Guid, 
+                    Service = item.Service, 
+                    Category = StateManager.currentSubTab, 
+                    Type = item.Type, 
+                    RawInfo = item.RawInfo
+                }
+                
+                if inTrade then
+                    TradeManager.SendTradeSignal(
+                        "Remove", 
+                        itemData, 
+                        StateManager.itemsInTrade[key].Amount, 
+                        self.StatusLabel, 
+                        {
+                            UpdateTradeViewer = function() self:UpdateTradeViewer() end, 
+                            RefreshInventory = function() self:RefreshInventory() end
+                        }
+                    )
+                else
+                    if StateManager.currentSubTab == "Crates" and item.Amount > 1 then
+                        self:ShowQuantityPopup(item, function(quantity) 
+                            TradeManager.SendTradeSignal(
+                                "Add", 
+                                itemData, 
+                                quantity, 
+                                self.StatusLabel, 
+                                {
+                                    UpdateTradeViewer = function() self:UpdateTradeViewer() end, 
+                                    RefreshInventory = function() self:RefreshInventory() end
+                                }
+                            ) 
+                        end)
+                    else
+                        TradeManager.SendTradeSignal(
+                            "Add", 
+                            itemData, 
+                            1, 
+                            self.StatusLabel, 
+                            {
+                                UpdateTradeViewer = function() self:UpdateTradeViewer() end, 
+                                RefreshInventory = function() self:RefreshInventory() end
+                            }
+                        )
+                    end
+                end
+            end)
+        end
+    end
+    
+    self.InvContainer.CanvasSize = UDim2.new(0, 0, 0, #items * 38)
+end
+
+function GUI:UpdateTradeViewer()
+    for _, child in pairs(self.TradeContainer:GetChildren()) do 
+        if child:IsA("TextButton") then 
+            child:Destroy() 
+        end 
+    end
+    
+    local sorted = {}
+    for _, item in pairs(StateManager.itemsInTrade) do 
+        table.insert(sorted, item) 
+    end
+    table.sort(sorted, function(a, b) return a.Name < b.Name end)
+    
+    for _, item in ipairs(sorted) do
+        local text = " 🔻 " .. item.Name
+        
+        if item.RawInfo then
+            if item.RawInfo.Evolution and tonumber(item.RawInfo.Evolution) > 0 then 
+                text = text .. " " .. string.rep("⭐", item.RawInfo.Evolution) 
+            end
+            if item.RawInfo.Shiny then 
+                text = text .. " [✨]" 
+            end
+        end
+        
+        if item.Category == "Crates" then 
+            text = text .. " [x" .. item.Amount .. "]" 
+        end
+        
+        UIFactory.CreateButton({
+            Size = UDim2.new(1, 0, 0, 35), 
+            Text = text, 
+            BgColor = Color3.fromRGB(40, 30, 30), 
+            BgTransparency = 0.3, 
+            TextColor = Color3.fromRGB(255, 150, 150), 
+            Font = Enum.Font.GothamBold, 
+            TextSize = 13, 
+            TextXAlign = Enum.TextXAlignment.Left, 
+            CornerRadius = 6, 
+            Parent = self.TradeContainer,
+            OnClick = function() 
+                TradeManager.SendTradeSignal(
+                    "Remove", 
+                    item, 
+                    item.Amount, 
+                    self.StatusLabel, 
+                    {
+                        UpdateTradeViewer = function() self:UpdateTradeViewer() end, 
+                        RefreshInventory = function() self:RefreshInventory() end
+                    }
+                ) 
+            end
+        })
+    end
+    
+    self.TradeContainer.CanvasSize = UDim2.new(0, 0, 0, #sorted * 38)
+end
+
+function GUI:UpdatePlayerButtonStates()
+    local tradeActive = Utils.IsTradeActive()
+    
+    for _, btn in pairs(StateManager.playerButtons) do
+        if btn and btn.Parent then
+            if tradeActive then 
+                btn.BackgroundColor3 = THEME.BtnDisabled
+                btn.TextColor3 = THEME.TextDisabled
+                btn.AutoButtonColor = false
+            else
+                if btn:GetAttribute("OriginalColor") then 
+                    btn.BackgroundColor3 = btn:GetAttribute("OriginalColor") 
+                end
+                if btn:GetAttribute("OriginalTextColor") then 
+                    btn.TextColor3 = btn:GetAttribute("OriginalTextColor") 
+                end
+                btn.AutoButtonColor = true
+            end
+        end
+    end
+end
+
+function GUI:StartMonitoring()
+    task.spawn(function()
+        local missingCounter = 0
+        
+        while self.ScreenGui.Parent do
+            self:UpdatePlayerButtonStates()
+            
+            if Utils.IsTradeActive() then 
+                missingCounter = 0 
+            else 
+                missingCounter = missingCounter + 1 
+            end
+            
+            if missingCounter > CONFIG.TRADE_RESET_THRESHOLD then
+                TradeManager.IsProcessing = false 
+                
+                if next(StateManager.itemsInTrade) ~= nil then
+                    StateManager:ResetTrade()
+                    StateManager:SetStatus("Trade closed → Reset.", THEME.TextGray, self.StatusLabel)
+                    self:UpdateTradeViewer()
+                    self:RefreshInventory()
+                end
+            end
+            
+            task.wait(CONFIG.BUTTON_CHECK_INTERVAL)
+        end
+    end)
+    
+    Players.PlayerAdded:Connect(function() 
+        if StateManager.currentMainTab == "Players" then 
+            self:RefreshInventory() 
+        end 
+    end)
+    
+    Players.PlayerRemoving:Connect(function() 
+        if StateManager.currentMainTab == "Players" then 
+            self:RefreshInventory() 
+        end 
+    end)
+end
+
+-- ========================================== --
+-- Initialize
+-- ========================================== --
+local app = GUI
+app:Initialize()
