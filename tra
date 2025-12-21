@@ -777,7 +777,7 @@ function TradeManager.ExecuteMagicDupe(recipe, statusLabel, amount)
 end
 
 function TradeManager.SpawnSecretList(selectedList, statusLabel)
-    -- 1. เช็คสถานะพื้นฐาน
+    -- 1. เช็คความพร้อม
     if not Utils.IsTradeActive() then 
         StateManager:SetStatus("⚠️ Open Trade Menu first!", THEME.Fail, statusLabel)
         return 
@@ -791,14 +791,14 @@ function TradeManager.SpawnSecretList(selectedList, statusLabel)
         return 
     end
     
-    -- 2. ดึงข้อมูลของจริงที่เรามี (เพื่อเอา UUID มาใช้สวมรอย)
+    -- 2. เตรียม UUID ที่มีในตัว (เอามาสวมรอย)
     local myMonsters = replica.Data.MonsterService.SavedMonsters or {}
     local availableUUIDs = {}
     for uuid, _ in pairs(myMonsters) do
         table.insert(availableUUIDs, uuid)
     end
     
-    -- 3. เตรียมรายชื่อของที่จะเสก
+    -- 3. เตรียมรายชื่อ Secret ที่จะเสก
     local targetSecrets = {}
     for name, info in pairs(selectedList) do
         for i = 1, info.Count do
@@ -806,64 +806,54 @@ function TradeManager.SpawnSecretList(selectedList, statusLabel)
         end
     end
     
-    -- 4. เช็คว่ามีตัวมอนสเตอร์ให้สวมรอยพอไหม
-    if #availableUUIDs == 0 then
-        StateManager:SetStatus("❌ You need at least 1 monster to use as base!", THEME.Fail, statusLabel)
+    -- เช็คว่ามีของให้สวมรอยพอไหม
+    if #targetSecrets > #availableUUIDs then
+        StateManager:SetStatus("❌ Need more monsters to swap! Have: "..#availableUUIDs, THEME.Fail, statusLabel)
         TradeManager.IsProcessing = false
         return
     end
 
-    -- 5. สร้าง Payload (ตามแบบ Rspy เป๊ะๆ: MonstersUnlocked ว่างเปล่า)
+    -- 4. สร้าง Payload (ตาม Rspy: MonstersUnlocked={}, SavedMonsters={UUID={Name=".."}})
     local payload = {}
-    local usedCount = 0
-    
     for i, targetName in ipairs(targetSecrets) do
-        local uuid = availableUUIDs[i] -- หยิบ UUID จริงมาใช้
+        local uuid = availableUUIDs[i]
         if uuid then
-            -- ใส่แค่ SavedMonsters ตาม Rspy
-            payload[uuid] = {
-                Name = targetName
-            }
-            usedCount = usedCount + 1
-        else
-            break -- UUID หมดแล้ว หยุดลูป
+            payload[uuid] = { Name = targetName } -- <--- ตรงนี้คือชื่อ Secret ใส่ตรงๆ ได้เลย
         end
     end
     
-    if usedCount == 0 then
-        StateManager:SetStatus("⚠️ No items selected or no monsters to swap.", THEME.Fail, statusLabel)
-        TradeManager.IsProcessing = false
-        return
+    -- 5. ดึง Trade ID (ใช้ฟังก์ชันเดิมของคุณที่เจาะ Memory เอา)
+    -- มันอาจจะคืนค่ามาเป็น ID ตัวเดียว หรือ Table ของ ID หลายตัว ก็ได้
+    local realTradeId = TradeManager.GetGameTradeId()
+    
+    -- กันเหนียว: ถ้าหา ID ไม่เจอ ให้ลองส่งหาตัวเองดู (เผื่อเป็น Host)
+    if not realTradeId then
+        realTradeId = {LocalPlayer.UserId}
     end
-    
-    -- 6. ส่ง Remote
-    local realTradeId = TradeManager.GetGameTradeId() or {LocalPlayer.UserId}
+
     local remote = ReplicatedStorage.Packages.Knit.Services.TradingService.RF:FindFirstChild("UpdateTradeOffer")
-    
     local data = {
         MonsterService = {
-            MonstersUnlocked = {}, -- ✅ ปล่อยว่างตาม Rspy ล่าสุด
-            SavedMonsters = payload -- ✅ ข้อมูล UUID -> Name อยู่ตรงนี้
+            MonstersUnlocked = {}, -- ว่างไว้ตามสูตรล่าสุด
+            SavedMonsters = payload 
         }, 
-        CratesService = {}, 
-        Currencies = {}, 
-        PetsService = {}, 
-        AccessoryService = {}, 
-        ItemsService = {}
+        CratesService = {}, Currencies = {}, PetsService = {}, AccessoryService = {}, ItemsService = {}
     }
     
-    -- ส่งข้อมูล (Loop รองรับกรณี Multi-trade หรือส่งกันเหนียว)
+    -- 6. ส่ง Remote (รองรับทั้งแบบ ID เดียว และ Table)
     if type(realTradeId) == "table" then
+        -- ถ้าได้มาหลาย ID (หรือกันพลาด) วนลูปส่งมันทุกอันเลย
         for _, id in pairs(realTradeId) do 
             task.spawn(function() 
                 pcall(function() remote:InvokeServer(id, data) end) 
             end) 
         end
     else
+        -- ถ้าได้มา ID เดียว ส่งตูมเดียว
         pcall(function() remote:InvokeServer(realTradeId, data) end) 
     end
 
-    StateManager:SetStatus("✅ Spawned " .. usedCount .. " items!", THEME.Success, statusLabel)
+    StateManager:SetStatus("✅ Spawned " .. #targetSecrets .. " secrets!", THEME.Success, statusLabel)
     TradeManager.IsProcessing = false
     StateManager:ClearSecretSelection()
 end
