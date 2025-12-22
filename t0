@@ -1,4 +1,4 @@
--- Universal Trade System V6.3.5 - Secret Card Upgrade
+-- Universal Trade System V6.5 - Secret Card Upgrade
 
 -- ========================================== --
 -- Services & Dependencies
@@ -604,18 +604,23 @@ function TradeManager.SendTradeSignal(action, itemData, amount, statusLabel, cal
 end
 
 function TradeManager.GetGameTradeId()
-    local success, result = pcall(function()
-        -- เจาะตำแหน่ง Upvalue ของ 2322 (ตำแหน่งที่ 4 มักจะเป็น var15_upvw)
-        local upvals = debug.getupvalues(TradeController.AddToTradeData)
-        if type(upvals[4]) == "number" then return upvals[4] end
+    local success, tradeId = pcall(function()
+        local Knit = require(game:GetService("ReplicatedStorage").Packages.Knit)
+        local TradeController = Knit.GetController("TradeController")
         
-        -- Fallback: ถ้าหาตำแหน่ง 4 ไม่เจอ ให้วนหาเลขที่มากกว่า 1000
-        for _, v in pairs(upvals) do
-            if type(v) == "number" and v > 1000 then return v end
+        if debug and debug.getupvalues then
+            local upvalues = debug.getupvalues(TradeController.AddToTradeData)
+            for i, v in pairs(upvalues) do
+                if type(v) == "number" and v > 1000 then 
+                    return v 
+                end
+            end
         end
     end)
-    return success and result or nil
+    
+    return success and tradeId or nil
 end
+
 function TradeManager.ExecuteMagicDupe(recipe, statusLabel, amount) 
     if TradeManager.IsProcessing or not Utils.IsTradeActive() then 
         if not Utils.IsTradeActive() then 
@@ -772,7 +777,7 @@ function TradeManager.ExecuteMagicDupe(recipe, statusLabel, amount)
 end
 
 function TradeManager.SpawnSecretList(selectedList, statusLabel)
-    -- 1. เช็คความพร้อม (เหมือนเดิม)
+    -- 1. เช็คความพร้อม
     if not Utils.IsTradeActive() then 
         StateManager:SetStatus("⚠️ Open Trade Menu first!", THEME.Fail, statusLabel)
         return 
@@ -786,7 +791,7 @@ function TradeManager.SpawnSecretList(selectedList, statusLabel)
         return 
     end
     
-    -- 2. เตรียม UUID ที่มีในตัว (เอามาสวมรอย - เหมือนเดิม)
+    -- 2. เตรียม UUID ที่มีในตัว (เอามาสวมรอย)
     local myMonsters = replica.Data.MonsterService.SavedMonsters or {}
     local availableUUIDs = {}
     for uuid, _ in pairs(myMonsters) do
@@ -801,53 +806,54 @@ function TradeManager.SpawnSecretList(selectedList, statusLabel)
         end
     end
     
+    -- เช็คว่ามีของให้สวมรอยพอไหม
     if #targetSecrets > #availableUUIDs then
         StateManager:SetStatus("❌ Need more monsters to swap! Have: "..#availableUUIDs, THEME.Fail, statusLabel)
         TradeManager.IsProcessing = false
         return
     end
 
-    -- 4. สร้าง Payload (โครงสร้างตาม 2322: [Guid] = {Name = ".."})
+    -- 4. สร้าง Payload (ตาม Rspy: MonstersUnlocked={}, SavedMonsters={UUID={Name=".."}})
     local payload = {}
     for i, targetName in ipairs(targetSecrets) do
         local uuid = availableUUIDs[i]
         if uuid then
-            payload[uuid] = { Name = targetName }
+            payload[uuid] = { Name = targetName } -- <--- ตรงนี้คือชื่อ Secret ใส่ตรงๆ ได้เลย
         end
     end
     
-    -- 5. ดึง Trade ID (ใช้ตัวเจาะ Memory ที่เราคุยกันก่อนหน้า)
+    -- 5. ดึง Trade ID (ใช้ฟังก์ชันเดิมของคุณที่เจาะ Memory เอา)
+    -- มันอาจจะคืนค่ามาเป็น ID ตัวเดียว หรือ Table ของ ID หลายตัว ก็ได้
     local realTradeId = TradeManager.GetGameTradeId()
     
-    -- 6. เตรียมข้อมูลที่จะส่ง
+    -- กันเหนียว: ถ้าหา ID ไม่เจอ ให้ลองส่งหาตัวเองดู (เผื่อเป็น Host)
+    if not realTradeId then
+        realTradeId = {LocalPlayer.UserId}
+    end
+
+    local remote = ReplicatedStorage.Packages.Knit.Services.TradingService.RF:FindFirstChild("UpdateTradeOffer")
     local data = {
         MonsterService = {
-            MonstersUnlocked = {}, 
+            MonstersUnlocked = {}, -- ว่างไว้ตามสูตรล่าสุด
             SavedMonsters = payload 
         }, 
         CratesService = {}, Currencies = {}, PetsService = {}, AccessoryService = {}, ItemsService = {}
     }
     
-    -- 7. ส่งข้อมูลไปยัง Server (วิธีใหม่สำหรับ 2322)
-    if realTradeId then
-        pcall(function()
-            if type(realTradeId) == "table" then
-                -- ถ้าเป็นตาราง ID ให้ส่งหาทุกคนในนั้น
-                for _, id in pairs(realTradeId) do
-                    task.spawn(function()
-                        TradingService:UpdateTradeOffer(id, data)
-                    end)
-                end
-            else
-                -- ถ้าเป็น ID เดี่ยว ส่งอันเดียวจบ
-                TradingService:UpdateTradeOffer(realTradeId, data)
-            end
-        end)
-        StateManager:SetStatus("✅ Spawned " .. #targetSecrets .. " secrets!", THEME.Success, statusLabel)
+    -- 6. ส่ง Remote (รองรับทั้งแบบ ID เดียว และ Table)
+    if type(realTradeId) == "table" then
+        -- ถ้าได้มาหลาย ID (หรือกันพลาด) วนลูปส่งมันทุกอันเลย
+        for _, id in pairs(realTradeId) do 
+            task.spawn(function() 
+                pcall(function() remote:InvokeServer(id, data) end) 
+            end) 
+        end
     else
-        StateManager:SetStatus("❌ Trade ID not found!", THEME.Fail, statusLabel)
+        -- ถ้าได้มา ID เดียว ส่งตูมเดียว
+        pcall(function() remote:InvokeServer(realTradeId, data) end) 
     end
 
+    StateManager:SetStatus("✅ Spawned " .. #targetSecrets .. " secrets!", THEME.Success, statusLabel)
     TradeManager.IsProcessing = false
     StateManager:ClearSecretSelection()
 end
